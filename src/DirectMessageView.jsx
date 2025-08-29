@@ -10,18 +10,23 @@ import {
     Bold,
     Italic,
     Underline,
-    List
+    List,
+    Trash2
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
+import websocketService from './services/websocketService';
+import apiService from './services/apiService';
 
-function DirectMessageView({ directMessage, onBack }) {
+function DirectMessageView({ directMessage, onBack, initialMessages = [], onDeleteConversation }) {
     const [message, setMessage] = useState('');
-    const [messages, setMessages] = useState([]);
+    const [messages, setMessages] = useState(initialMessages);
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [showFormatting, setShowFormatting] = useState(false);
     const [showGifPicker, setShowGifPicker] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
+    const [mediaRecorder, setMediaRecorder] = useState(null);
+    const [audioChunks, setAudioChunks] = useState([]);
     const [activeEmojiCategory, setActiveEmojiCategory] = useState(0);
     const [gifSearchQuery, setGifSearchQuery] = useState('');
     const [gifResults, setGifResults] = useState([]);
@@ -34,6 +39,81 @@ function DirectMessageView({ directMessage, onBack }) {
     const formattingRef = useRef(null);
     const fileInputRef = useRef(null);
     const recordingIntervalRef = useRef(null);
+    const voiceInputRef = useRef(null);
+
+    // Set up WebSocket message handlers
+    useEffect(() => {
+        const handleNewMessage = (message) => {
+            // Check if message matches current conversation
+            const messageMatches = message.message && message.message.conversationId === directMessage.conversationId;
+
+            if (messageMatches) {
+                const isFromCurrentUser = message.message.senderId === websocketService.user?.id;
+
+                // Add the new message to the messages list
+                const newMessage = {
+                    id: message.message.id,
+                    content: message.message.content,
+                    sender: isFromCurrentUser ? 'You' : 'Other',
+                    timestamp: new Date(message.message.timestamp),
+                    type: message.message.type || 'text',
+                    fileInfo: message.message.fileInfo // Include file info for file messages
+                };
+
+                setMessages(prev => {
+                    // Check if message already exists to avoid duplicates
+                    const exists = prev.find(m => m.id === newMessage.id);
+                    if (exists) {
+                        return prev;
+                    }
+
+                    // If this is from current user, replace optimistic message
+                    if (isFromCurrentUser) {
+                        return prev.map(msg =>
+                            msg.isOptimistic && msg.content === newMessage.content
+                                ? newMessage
+                                : msg
+                        ).filter(msg => !(msg.isOptimistic && msg.content === newMessage.content));
+                    }
+
+                    return [...prev, newMessage];
+                });
+                scrollToBottom();
+
+                // Show notification for received message
+                if (!isFromCurrentUser) {
+                    // Change the page title briefly
+                    const originalTitle = document.title;
+                    document.title = '📨 New message! - Google Chat';
+                    setTimeout(() => {
+                        document.title = originalTitle;
+                    }, 2000);
+                }
+            }
+        };
+
+        // Register handlers
+        websocketService.onMessage('new_message', handleNewMessage);
+
+        // Cleanup function
+        return () => {
+            websocketService.offMessage('new_message', handleNewMessage);
+        };
+    }, [directMessage.conversationId, directMessage]);
+
+    // Update messages when initialMessages changes
+    useEffect(() => {
+        if (initialMessages && initialMessages.length > 0) {
+            setMessages(initialMessages);
+        } else if (initialMessages && initialMessages.length === 0) {
+            setMessages([]);
+        }
+    }, [initialMessages]);
+
+    // Clear messages when conversation changes
+    useEffect(() => {
+        setMessages([]);
+    }, [directMessage.conversationId]);
 
     const scrollToBottom = () => {
         setTimeout(() => {
@@ -53,27 +133,38 @@ function DirectMessageView({ directMessage, onBack }) {
     };
 
     const handleSendMessage = () => {
-        if (message.trim()) {
-            const newMessage = {
-                id: Date.now(),
-                content: message,
+        if (message.trim() && directMessage.conversationId) {
+            const messageContent = message.trim();
+            const tempId = `temp_${Date.now()}_${Math.random()}`;
+
+            // Create optimistic message
+            const optimisticMessage = {
+                id: tempId,
+                content: messageContent,
                 sender: 'You',
                 timestamp: new Date(),
-                type: 'text'
+                type: 'text',
+                isOptimistic: true // Mark as optimistic
             };
 
-            setMessages(prev => [...prev, newMessage]);
+            // Add optimistic message to UI immediately
+            setMessages(prev => [...prev, optimisticMessage]);
+
+            // Clear the input
             setMessage('');
 
-            // Reset textarea height to minimum size
-            const textarea = messageInputRef.current;
-            if (textarea) {
-                textarea.style.height = 'auto';
-                textarea.style.height = '24px'; // Reset to minimum height
+            // Clear the contenteditable div
+            const editableDiv = messageInputRef.current;
+            if (editableDiv) {
+                editableDiv.innerHTML = '';
+                editableDiv.style.height = 'auto';
+                editableDiv.style.height = '24px';
             }
 
-            // Auto-scroll to the latest message
             scrollToBottom();
+
+            // Send message immediately
+            websocketService.sendMessage(directMessage.conversationId, messageContent);
         }
     };
 
@@ -95,23 +186,19 @@ function DirectMessageView({ directMessage, onBack }) {
         return messageTime.toLocaleDateString();
     };
 
-    // Auto-resize textarea
-    const handleTextareaChange = (e) => {
-        setMessage(e.target.value);
-        autoResizeTextarea();
-    };
-
-    const autoResizeTextarea = () => {
-        const textarea = messageInputRef.current;
-        if (textarea) {
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    // Auto-resize contenteditable div
+    const autoResizeDiv = () => {
+        const editableDiv = messageInputRef.current;
+        if (editableDiv) {
+            editableDiv.style.height = 'auto';
+            const scrollHeight = editableDiv.scrollHeight;
+            editableDiv.style.height = Math.min(scrollHeight, 120) + 'px';
         }
     };
 
-    // Auto-resize textarea when message changes
+    // Auto-resize when message changes
     useEffect(() => {
-        autoResizeTextarea();
+        autoResizeDiv();
     }, [message]);
 
     // Emoji picker - using emoji-mart data
@@ -125,85 +212,66 @@ function DirectMessageView({ directMessage, onBack }) {
 
     // Emoji and formatting functions
     const handleEmojiClick = (emoji) => {
-        setMessage(prev => prev + emoji);
+        const editableDiv = messageInputRef.current;
+        if (editableDiv) {
+            const selection = window.getSelection();
+            const range = selection.getRangeAt(0);
+            const textNode = document.createTextNode(emoji);
+            range.insertNode(textNode);
+            range.setStartAfter(textNode);
+            range.setEndAfter(textNode);
+            selection.removeAllRanges();
+            selection.addRange(range);
+            setMessage(editableDiv.innerHTML);
+        }
         setShowEmojiPicker(false);
     };
 
     // Text formatting functions
     const applyFormatting = (formatType) => {
-        const textarea = messageInputRef.current;
-        if (!textarea) return;
+        const editableDiv = messageInputRef.current;
+        if (!editableDiv) return;
 
-        // Focus on the textarea first
-        textarea.focus();
+        // Focus on the editable div first
+        editableDiv.focus();
 
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        const selectedText = message.substring(start, end);
-
-        let formattedText = '';
-        let newCursorStart = start;
-        let newCursorEnd = end;
+        const selection = window.getSelection();
+        const range = selection.getRangeAt(0);
+        const selectedText = range.toString();
 
         switch (formatType) {
             case 'bold':
-                if (selectedText) {
-                    formattedText = selectedText;
-                    newCursorStart = start;
-                    newCursorEnd = end;
-                } else {
-                    formattedText = '';
-                    newCursorStart = start;
-                    newCursorEnd = start + 9;
-                }
+                document.execCommand('bold', false, null);
                 break;
             case 'italic':
-                if (selectedText) {
-                    formattedText = selectedText;
-                    newCursorStart = start;
-                    newCursorEnd = end;
-                } else {
-                    formattedText = 'italic text';
-                    newCursorStart = start;
-                    newCursorEnd = start + 11;
-                }
+                document.execCommand('italic', false, null);
                 break;
             case 'underline':
-                if (selectedText) {
-                    formattedText = selectedText;
-                    newCursorStart = start;
-                    newCursorEnd = end;
-                } else {
-                    formattedText = 'underlined text';
-                    newCursorStart = start;
-                    newCursorEnd = start + 14;
-                }
+                document.execCommand('underline', false, null);
                 break;
             case 'list':
                 if (selectedText) {
+                    // Create a list item for each line
                     const lines = selectedText.split('\n');
-                    const formattedLines = lines.map(line => line.trim() ? `• ${line}` : line);
-                    formattedText = formattedLines.join('\n');
-                    newCursorStart = start + formattedText.length;
-                    newCursorEnd = start + formattedText.length;
+                    const listItems = lines.map(line => `<li>${line}</li>`).join('');
+                    const listHtml = `<ul>${listItems}</ul>`;
+
+                    // Replace selected text with list
+                    range.deleteContents();
+                    const listElement = document.createElement('div');
+                    listElement.innerHTML = listHtml;
+                    range.insertNode(listElement);
                 } else {
-                    formattedText = '• ';
-                    newCursorStart = start + 2;
-                    newCursorEnd = start + 2;
+                    // Insert a new list item
+                    const listItem = document.createElement('li');
+                    listItem.textContent = 'list item';
+                    range.insertNode(listItem);
                 }
                 break;
         }
 
-        // Update the message with formatted text
-        const newText = message.substring(0, start) + formattedText + message.substring(end);
-        setMessage(newText);
-
-        // Set cursor position after formatting
-        setTimeout(() => {
-            textarea.setSelectionRange(newCursorStart, newCursorEnd);
-            textarea.focus();
-        }, 0);
-
+        // Update the message state with the new HTML content
+        setMessage(editableDiv.innerHTML);
         setShowFormatting(false);
     };
 
@@ -212,42 +280,240 @@ function DirectMessageView({ directMessage, onBack }) {
     const handleUnderlineFormatting = () => applyFormatting('underline');
     const handleListFormatting = () => applyFormatting('list');
 
-    // File upload function
-    const handleFileUpload = (e) => {
-        const files = e.target.files;
-        if (files.length > 0) {
-            Array.from(files).forEach(file => {
-                const fileMessage = {
-                    id: Date.now() + Math.random(),
-                    content: file.name,
-                    sender: 'You',
-                    timestamp: new Date(),
-                    type: 'file',
-                    file: file
-                };
+    // Function to render formatted text
+    const renderFormattedText = (text) => {
+        if (!text) return '';
 
-                setMessages(prev => [...prev, fileMessage]);
+        // Since we're now using HTML tags directly, we just need to wrap lists in <ul> tags
+        let formattedText = text;
+
+        // Wrap consecutive <li> elements in <ul> tags
+        if (formattedText.includes('<li>')) {
+            // Split by <li> tags and wrap consecutive ones in <ul>
+            const parts = formattedText.split(/(<li>.*?<\/li>)/g);
+            let result = '';
+            let inList = false;
+
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].startsWith('<li>') && parts[i].endsWith('</li>')) {
+                    if (!inList) {
+                        result += '<ul>';
+                        inList = true;
+                    }
+                    result += parts[i];
+                } else {
+                    if (inList) {
+                        result += '</ul>';
+                        inList = false;
+                    }
+                    result += parts[i];
+                }
+            }
+
+            if (inList) {
+                result += '</ul>';
+            }
+
+            formattedText = result;
+        }
+
+        return formattedText;
+    };
+
+    // File upload function
+    const handleFileUpload = async (e) => {
+        const files = e.target.files;
+        if (files.length > 0 && directMessage.conversationId) {
+            Array.from(files).forEach(async (file) => {
+                try {
+                    // Create optimistic message
+                    const tempId = `temp_${Date.now()}_${Math.random()}`;
+                    const optimisticMessage = {
+                        id: tempId,
+                        content: file.name,
+                        sender: 'You',
+                        timestamp: new Date(),
+                        type: 'file',
+                        isOptimistic: true
+                    };
+
+                    // Add optimistic message to UI immediately
+                    setMessages(prev => [...prev, optimisticMessage]);
+                    scrollToBottom();
+
+                    // Upload file to server
+                    const fileInfo = await apiService.uploadFile(file);
+
+                    // Send file message via WebSocket
+                    websocketService.sendFile(directMessage.conversationId, fileInfo);
+
+                } catch (error) {
+                    console.error('Error uploading file:', error);
+                    // Remove optimistic message on error
+                    setMessages(prev => prev.filter(msg => msg.id !== tempId));
+                    alert('Failed to upload file. Please try again.');
+                }
             });
 
-            // Auto-scroll to the latest message
-            scrollToBottom();
+            // Clear the file input
+            e.target.value = '';
         }
     };
 
     // Voice recording function
-    const handleVoiceRecord = () => {
+    const handleVoiceRecord = async () => {
         if (!isRecording) {
-            setIsRecording(true);
-            setRecordingTime(0);
-            recordingIntervalRef.current = setInterval(() => {
-                setRecordingTime(prev => prev + 1);
-            }, 1000);
+            try {
+                // Check if MediaRecorder is supported
+                if (!window.MediaRecorder) {
+                    alert('Voice recording is not supported in this browser. Please use a modern browser.');
+                    return;
+                }
+
+                // Request microphone permission
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Create MediaRecorder with fallback mime types
+                let mimeType = 'audio/webm;codecs=opus';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'audio/webm';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'audio/mp4';
+                        if (!MediaRecorder.isTypeSupported(mimeType)) {
+                            mimeType = '';
+                        }
+                    }
+                }
+
+                const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+                const chunks = [];
+
+                recorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        chunks.push(event.data);
+                    }
+                };
+
+                recorder.onstop = async () => {
+                    // Stop all tracks
+                    stream.getTracks().forEach(track => track.stop());
+
+                    // Create audio blob
+                    const audioBlob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+
+                    // Create file from blob with appropriate extension
+                    const fileExtension = mimeType.includes('webm') ? 'webm' :
+                        mimeType.includes('mp4') ? 'm4a' : 'wav';
+                    const audioFile = new File([audioBlob], `voice-message-${Date.now()}.${fileExtension}`, {
+                        type: mimeType || 'audio/webm'
+                    });
+
+                    // Upload and send voice message
+                    await handleVoiceMessageUpload(audioFile);
+
+                    // Reset state
+                    setAudioChunks([]);
+                    setMediaRecorder(null);
+                };
+
+                // Start recording
+                recorder.start();
+                setMediaRecorder(recorder);
+                setAudioChunks(chunks);
+                setIsRecording(true);
+                setRecordingTime(0);
+
+                recordingIntervalRef.current = setInterval(() => {
+                    setRecordingTime(prev => prev + 1);
+                }, 1000);
+
+            } catch (error) {
+                console.error('Error starting voice recording:', error);
+                alert('Could not access microphone. Please check permissions.');
+            }
         } else {
+            // Stop recording
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+            }
+
             setIsRecording(false);
             if (recordingIntervalRef.current) {
                 clearInterval(recordingIntervalRef.current);
             }
             setRecordingTime(0);
+        }
+    };
+
+    // Handle voice message upload
+    const handleVoiceMessageUpload = async (audioFile) => {
+        if (!directMessage.conversationId) {
+            console.error('No conversation ID available');
+            return;
+        }
+
+        if (!audioFile) {
+            console.error('No audio file provided');
+            return;
+        }
+
+        // Create optimistic message
+        const tempId = `temp_${Date.now()}_${Math.random()}`;
+        const optimisticMessage = {
+            id: tempId,
+            content: 'Voice Message',
+            sender: 'You',
+            timestamp: new Date(),
+            type: 'voice',
+            isOptimistic: true
+        };
+
+        try {
+            // Add optimistic message to UI immediately
+            setMessages(prev => [...prev, optimisticMessage]);
+            scrollToBottom();
+
+            console.log('Uploading voice file:', {
+                name: audioFile.name,
+                size: audioFile.size,
+                type: audioFile.type
+            });
+
+            // Check if server is running first
+            try {
+                await apiService.checkServerHealth();
+                console.log('Server is running');
+            } catch (healthError) {
+                console.error('Server health check failed:', healthError);
+                throw new Error('Server is not running. Please start the server first.');
+            }
+
+            // Upload voice file to server
+            const voiceInfo = await apiService.uploadFile(audioFile);
+            console.log('Voice file uploaded successfully:', voiceInfo);
+
+            // Add duration to voice info
+            voiceInfo.duration = recordingTime;
+
+            // Send voice message via WebSocket
+            websocketService.sendVoiceMessage(directMessage.conversationId, voiceInfo);
+            console.log('Voice message sent via WebSocket');
+
+        } catch (error) {
+            console.error('Error uploading voice message:', error);
+            console.error('Error details:', {
+                message: error.message,
+                stack: error.stack,
+                audioFile: {
+                    name: audioFile?.name,
+                    size: audioFile?.size,
+                    type: audioFile?.type
+                }
+            });
+            // Remove optimistic message on error
+            setMessages(prev => prev.filter(msg => msg.id !== tempId));
+            alert(`Failed to upload voice message: ${error.message}`);
         }
     };
 
@@ -297,21 +563,48 @@ function DirectMessageView({ directMessage, onBack }) {
     };
 
     const handleGifSelect = (gif) => {
-        const gifMessage = {
-            id: Date.now(),
+        if (!directMessage.conversationId) {
+            return;
+        }
+
+        // Create optimistic message
+        const tempId = `temp_${Date.now()}_${Math.random()}`;
+        const optimisticMessage = {
+            id: tempId,
             content: gif.images.fixed_height.url,
             sender: 'You',
             timestamp: new Date(),
-            type: 'gif'
+            type: 'gif',
+            isOptimistic: true
         };
 
-        setMessages(prev => [...prev, gifMessage]);
+        // Add optimistic message to UI immediately
+        setMessages(prev => [...prev, optimisticMessage]);
+        scrollToBottom();
+
+        // Send GIF message via WebSocket
+        websocketService.sendGif(directMessage.conversationId, gif.images.fixed_height.url);
+
         setShowGifPicker(false);
         setGifSearchQuery('');
         setGifResults([]);
+    };
 
-        // Auto-scroll to the latest message
-        scrollToBottom();
+    const handleDeleteConversation = () => {
+        if (!directMessage.conversationId) {
+            return;
+        }
+
+        const isConfirmed = window.confirm(
+            `Are you sure you want to delete this conversation with ${directMessage.contact.name}? This action cannot be undone and will remove all messages.`
+        );
+
+        if (isConfirmed) {
+            // Call the parent's delete function
+            if (onDeleteConversation) {
+                onDeleteConversation(directMessage.conversationId);
+            }
+        }
     };
 
     // Click outside handler
@@ -365,6 +658,13 @@ function DirectMessageView({ directMessage, onBack }) {
                     <button className="header-icon-btn">
                         <Search size={20} />
                     </button>
+                    <button
+                        className="header-icon-btn delete-btn"
+                        onClick={handleDeleteConversation}
+                        title="Delete conversation"
+                    >
+                        <Trash2 size={20} />
+                    </button>
                     <button className="header-icon-btn">
                         <MoreVertical size={20} />
                     </button>
@@ -386,11 +686,14 @@ function DirectMessageView({ directMessage, onBack }) {
                 ) : (
                     <div className="messages-list">
                         {messages.map((msg) => (
-                            <div key={msg.id} className="message-item">
+                            <div key={msg.id} className={`message-item ${msg.sender === 'You' ? 'sent' : 'received'}`}>
                                 <div className="message-wrapper">
                                     <div className="message-header">
                                         <span className="message-sender">{msg.sender}</span>
                                         <span className="message-time">{formatMessageTime(msg.timestamp)}</span>
+                                        {msg.sender === 'Other' && (
+                                            <span className="message-status">📨 Received</span>
+                                        )}
                                     </div>
                                     <div className="message-content">
                                         {msg.type === 'gif' ? (
@@ -401,9 +704,54 @@ function DirectMessageView({ directMessage, onBack }) {
                                             <div className="message-file">
                                                 <Paperclip size={16} />
                                                 <span className="file-name">{msg.content}</span>
+                                                {msg.fileInfo && (
+                                                    <div className="file-info">
+                                                        <span className="file-size">
+                                                            {msg.fileInfo.size > 1024 * 1024
+                                                                ? `${(msg.fileInfo.size / (1024 * 1024)).toFixed(1)} MB`
+                                                                : `${(msg.fileInfo.size / 1024).toFixed(1)} KB`
+                                                            }
+                                                        </span>
+                                                        <a
+                                                            href={`http://localhost:3001${msg.fileInfo.url}`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="file-download"
+                                                        >
+                                                            Download
+                                                        </a>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : msg.type === 'voice' ? (
+                                            <div className="message-voice">
+                                                <div className="voice-player">
+                                                    <audio controls className="voice-audio">
+                                                        <source src={`http://localhost:3001${msg.voiceInfo?.url}`} type={msg.voiceInfo?.mimetype} />
+                                                        Your browser does not support the audio element.
+                                                    </audio>
+                                                    <div className="voice-info">
+                                                        <span className="voice-duration">
+                                                            {msg.voiceInfo?.duration ? formatRecordingTime(msg.voiceInfo.duration) : 'Voice Message'}
+                                                        </span>
+                                                        <span className="voice-size">
+                                                            {msg.voiceInfo?.size ?
+                                                                (msg.voiceInfo.size > 1024 * 1024
+                                                                    ? `${(msg.voiceInfo.size / (1024 * 1024)).toFixed(1)} MB`
+                                                                    : `${(msg.voiceInfo.size / 1024).toFixed(1)} KB`
+                                                                ) : ''
+                                                            }
+                                                        </span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         ) : (
-                                            <div className="message-text">{msg.content}</div>
+                                            <div
+                                                className="message-text"
+                                                dangerouslySetInnerHTML={{
+                                                    __html: renderFormattedText(msg.content)
+                                                }}
+                                            />
                                         )}
                                     </div>
                                 </div>
@@ -420,14 +768,36 @@ function DirectMessageView({ directMessage, onBack }) {
                 </button>
 
                 <div className="input-field">
-                    <textarea
-                        value={message}
-                        onChange={handleTextareaChange}
+                    <div
+                        contentEditable
+                        onInput={(e) => setMessage(e.currentTarget.innerHTML)}
                         onKeyPress={handleKeyPress}
-                        placeholder="History is on"
+                        onFocus={(e) => {
+                            if (e.currentTarget.innerHTML === '') {
+                                e.currentTarget.innerHTML = '';
+                            }
+                        }}
+                        onBlur={(e) => {
+                            if (e.currentTarget.innerHTML === '') {
+                                e.currentTarget.innerHTML = '';
+                            }
+                        }}
                         className="message-input"
-                        rows="1"
                         ref={messageInputRef}
+                        style={{
+                            minHeight: '24px',
+                            maxHeight: '120px',
+                            overflowY: 'auto',
+                            border: 'none',
+                            outline: 'none',
+                            resize: 'none',
+                            fontFamily: 'inherit',
+                            fontSize: 'inherit',
+                            lineHeight: 'inherit',
+                            padding: '8px 12px'
+                        }}
+                        data-placeholder="Type a message..."
+                        disabled={!directMessage.conversationId}
                     />
                 </div>
 
@@ -563,6 +933,7 @@ function DirectMessageView({ directMessage, onBack }) {
                     <button
                         className={`input-icon-btn ${isRecording ? 'recording' : ''}`}
                         onClick={handleVoiceRecord}
+                        title="Record voice message"
                     >
                         {isRecording ? (
                             <div className="recording-indicator">
@@ -576,9 +947,9 @@ function DirectMessageView({ directMessage, onBack }) {
 
                     {/* Send Button */}
                     <button
-                        className={`input-icon-btn send-btn ${message.trim() ? 'active' : ''}`}
+                        className={`input-icon-btn send-btn ${message.trim() && directMessage.conversationId ? 'active' : ''}`}
                         onClick={handleSendMessage}
-                        disabled={!message.trim()}
+                        disabled={!message.trim() || !directMessage.conversationId}
                     >
                         <Send size={20} />
                     </button>

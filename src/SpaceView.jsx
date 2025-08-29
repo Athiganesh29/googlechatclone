@@ -23,6 +23,7 @@ import {
     Trash2
 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
+import websocketService from './services/websocketService';
 
 function SpaceView({ space, onBack }) {
     const [activeTab, setActiveTab] = useState('chat');
@@ -68,6 +69,31 @@ function SpaceView({ space, onBack }) {
     const messagesEndRef = useRef(null);
     const membersDropdownRef = useRef(null);
 
+    // Set up WebSocket message handler for new messages
+    useEffect(() => {
+        const handleNewMessage = (message) => {
+            if (message.message && message.message.conversationId === space.conversationId) {
+                // Add the new message to the messages list
+                const newMessage = {
+                    id: message.message.id,
+                    content: message.message.content,
+                    sender: message.message.senderId === websocketService.user?.id ? 'You' : 'Other',
+                    timestamp: new Date(message.message.timestamp),
+                    type: message.message.type || 'text'
+                };
+
+                setMessages(prev => [...prev, newMessage]);
+                scrollToBottom();
+            }
+        };
+
+        websocketService.onMessage('new_message', handleNewMessage);
+
+        return () => {
+            websocketService.offMessage('new_message');
+        };
+    }, [space.conversationId]);
+
     // Emoji picker - using emoji-mart data
     const emojiCategories = [
         { name: 'Smileys & Emotion', emojis: ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁', '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🤭', '🤫', '🤥', '😶', '😐', '😑', '😯', '😦', '😧', '😮', '😲', '🥱', '😴', '🤤', '😪', '😵', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕'] },
@@ -86,7 +112,6 @@ function SpaceView({ space, onBack }) {
     const searchGmailUsers = async (query) => {
         try {
             setIsSearchingMembers(true);
-            console.log('Searching for members:', query);
             let results = [];
 
             // Simulate Gmail API search - in real implementation, this would call Google People API
@@ -152,7 +177,6 @@ function SpaceView({ space, onBack }) {
             };
             setMembers(prev => {
                 const updatedMembers = [...prev, newMember];
-                console.log('Members updated:', updatedMembers);
                 // Save to localStorage
                 localStorage.setItem(`space-members-${space.id}`, JSON.stringify(updatedMembers));
                 return updatedMembers;
@@ -217,21 +241,12 @@ function SpaceView({ space, onBack }) {
     };
 
     const handleSendMessage = () => {
-        if (message.trim()) {
-            const newMessage = {
-                id: Date.now(),
-                content: message,
-                sender: 'You',
-                timestamp: new Date(),
-                type: 'text'
-            };
+        if (message.trim() && space.conversationId) {
+            // Send message via WebSocket
+            websocketService.sendMessage(space.conversationId, message);
 
-            setMessages(prev => [...prev, newMessage]);
+            // Clear the input
             setMessage('');
-            console.log('Message sent:', newMessage);
-
-            // Auto-scroll to the latest message
-            scrollToBottom();
         }
     };
 
@@ -371,7 +386,6 @@ function SpaceView({ space, onBack }) {
                 };
 
                 setMessages(prev => [...prev, fileMessage]);
-                console.log('File sent:', fileMessage);
             });
 
             // Auto-scroll to the latest message
@@ -391,7 +405,6 @@ function SpaceView({ space, onBack }) {
             if (recordingIntervalRef.current) {
                 clearInterval(recordingIntervalRef.current);
             }
-            console.log('Recording stopped, duration:', recordingTime);
             setRecordingTime(0);
         }
     };
@@ -465,7 +478,6 @@ function SpaceView({ space, onBack }) {
         setShowGifPicker(false);
         setGifSearchQuery('');
         setGifResults([]);
-        console.log('GIF sent:', gifMessage);
 
         // Auto-scroll to the latest message
         scrollToBottom();
@@ -578,7 +590,6 @@ function SpaceView({ space, onBack }) {
                                 </button>
                             </div>
                             <span className="space-members">{members.length} member{members.length !== 1 ? 's' : ''}</span>
-                            {console.log('Current members count:', members.length, 'Members:', members)}
 
                             {/* Members Dropdown */}
                             {showMembersDropdown && (

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { GoogleLogin, useGoogleLogin } from '@react-oauth/google';
 import { Eye, EyeOff, Mail, Lock, AlertCircle, CheckCircle, MessageCircle } from 'lucide-react';
 import './Login.css';
+import apiService from '../services/apiService';
 
 const Login = ({ onLoginSuccess, onBackToApp }) => {
     const [email, setEmail] = useState('');
@@ -14,84 +14,132 @@ const Login = ({ onLoginSuccess, onBackToApp }) => {
     const [rememberMe, setRememberMe] = useState(false);
     const [isGuestMode, setIsGuestMode] = useState(false);
 
-    // Google OAuth login
-    const googleLogin = useGoogleLogin({
-        onSuccess: async (response) => {
-            try {
-                setIsLoading(true);
-                setError('');
-
-                // Get user info from Google
-                const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                    headers: { Authorization: `Bearer ${response.access_token}` },
-                });
-
-                if (!userInfoResponse.ok) {
-                    throw new Error('Failed to get user info');
-                }
-
-                const userInfo = await userInfoResponse.json();
-
-                // Create user data object
-                const userData = {
-                    name: userInfo.name,
-                    email: userInfo.email,
-                    picture: userInfo.picture,
-                    sub: userInfo.sub,
-                    accessToken: response.access_token
-                };
-
-                // Save to localStorage
-                localStorage.setItem('googleChatUser', JSON.stringify(userData));
-                localStorage.setItem('googleChatAccessToken', response.access_token);
-
-                setSuccess('Login successful! Redirecting...');
-                setTimeout(() => {
-                    onLoginSuccess(userData);
-                }, 1500);
-
-            } catch (error) {
-                console.error('Google login error:', error);
-                setError('Failed to login with Google. Please try again.');
-            } finally {
-                setIsLoading(false);
-            }
-        },
-        onError: (error) => {
-            console.error('Google login error:', error);
-            setError('Google login failed. Please try again.');
-            setIsLoading(false);
-        },
-        scope: 'https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/contacts.readonly',
-    });
-
-    // Handle credential response (for Google One Tap)
-    const handleCredentialResponse = (response) => {
+    // Handle Google sign in
+    const handleGoogleSignIn = async () => {
         try {
             setIsLoading(true);
             setError('');
 
-            // Decode the JWT token
-            const decoded = JSON.parse(atob(response.credential.split('.')[1]));
-
-            const userData = {
-                name: decoded.name,
-                email: decoded.email,
-                picture: decoded.picture,
-                sub: decoded.sub
+            // For demo purposes, create a demo Google user
+            const demoUser = {
+                name: 'Demo Google User',
+                email: 'demo.google@example.com'
             };
+
+            // Try to find existing user or create new one
+            let userData;
+            try {
+                // Try to create user (will fail if user already exists)
+                userData = await apiService.createUser(demoUser.name, demoUser.email);
+            } catch (error) {
+                if (error.message.includes('already exists')) {
+                    // User exists, get user data from available users
+                    const users = await apiService.getUsers();
+                    userData = users.find(u => u.email === demoUser.email);
+                } else {
+                    throw error;
+                }
+            }
+
+            if (!userData) {
+                throw new Error('Failed to get or create user');
+            }
 
             // Save to localStorage
             localStorage.setItem('googleChatUser', JSON.stringify(userData));
 
-            setSuccess('Login successful! Redirecting...');
+            setSuccess('Google login successful! Redirecting...');
             setTimeout(() => {
                 onLoginSuccess(userData);
             }, 1500);
 
         } catch (error) {
-            console.error('Error processing login:', error);
-            setError('Login failed. Please try again.');
+            console.error('Error processing Google login:', error);
+            setError('Google login failed. Please try again.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Handle Athi login
+    const handleAthiLogin = async () => {
+        try {
+            setIsLoading(true);
+            setError('');
+
+            const athiUser = {
+                name: 'Athi',
+                email: 'aathi7009@gmail.com'
+            };
+
+            // Try to find existing user or create new one
+            let userData;
+            try {
+                userData = await apiService.createUser(athiUser.name, athiUser.email);
+            } catch (error) {
+                if (error.message.includes('already exists')) {
+                    const users = await apiService.getUsers();
+                    userData = users.find(u => u.email === athiUser.email);
+                } else {
+                    throw error;
+                }
+            }
+
+            if (!userData) {
+                throw new Error('Failed to get or create user');
+            }
+
+            localStorage.setItem('googleChatUser', JSON.stringify(userData));
+            setSuccess('Athi login successful! Redirecting...');
+            setTimeout(() => {
+                onLoginSuccess(userData);
+            }, 1500);
+
+        } catch (error) {
+            console.error('Error processing Athi login:', error);
+            setError('Athi login failed. Please try again.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // Handle Athiganesh login
+    const handleAthiganeshLogin = async () => {
+        try {
+            setIsLoading(true);
+            setError('');
+
+            const athiganeshUser = {
+                name: 'Athiganesh',
+                email: 'athiganesh273@gmail.com'
+            };
+
+            // Try to find existing user or create new one
+            let userData;
+            try {
+                userData = await apiService.createUser(athiganeshUser.name, athiganeshUser.email);
+            } catch (error) {
+                if (error.message.includes('already exists')) {
+                    const users = await apiService.getUsers();
+                    userData = users.find(u => u.email === athiganeshUser.email);
+                } else {
+                    throw error;
+                }
+            }
+
+            if (!userData) {
+                throw new Error('Failed to get or create user');
+            }
+
+            localStorage.setItem('googleChatUser', JSON.stringify(userData));
+            setSuccess('Athiganesh login successful! Redirecting...');
+            setTimeout(() => {
+                onLoginSuccess(userData);
+            }, 1500);
+
+        } catch (error) {
+            console.error('Error processing Athiganesh login:', error);
+            setError('Athiganesh login failed. Please try again.');
         } finally {
             setIsLoading(false);
         }
@@ -115,37 +163,43 @@ const Login = ({ onLoginSuccess, onBackToApp }) => {
     };
 
     // Handle password form submission
-    const handlePasswordSubmit = (e) => {
+    const handlePasswordSubmit = async (e) => {
         e.preventDefault();
         if (!password.trim()) {
             setError('Please enter your password.');
             return;
         }
 
-        // Simulate login process
         setIsLoading(true);
         setError('');
 
-        setTimeout(() => {
-            // For demo purposes, accept any password for demo@example.com
-            if (email === 'demo@example.com' && password === 'demo123') {
-                const userData = {
-                    name: 'Demo User',
-                    email: email,
-                    picture: null,
-                    sub: 'demo-user'
-                };
+        try {
+            // For demo purposes, accept any password for existing users
+            const users = await apiService.getUsers();
+            const existingUser = users.find(u => u.email === email);
 
-                localStorage.setItem('googleChatUser', JSON.stringify(userData));
+            if (existingUser) {
+                // User exists, proceed with login
+                localStorage.setItem('googleChatUser', JSON.stringify(existingUser));
                 setSuccess('Login successful! Redirecting...');
                 setTimeout(() => {
-                    onLoginSuccess(userData);
+                    onLoginSuccess(existingUser);
                 }, 1500);
             } else {
-                setError('Invalid email or password. Please try again.');
+                // Create new user
+                const newUser = await apiService.createUser(email.split('@')[0], email);
+                localStorage.setItem('googleChatUser', JSON.stringify(newUser));
+                setSuccess('Account created and login successful! Redirecting...');
+                setTimeout(() => {
+                    onLoginSuccess(newUser);
+                }, 1500);
             }
+        } catch (error) {
+            console.error('Login error:', error);
+            setError('Login failed. Please try again.');
+        } finally {
             setIsLoading(false);
-        }, 1000);
+        }
     };
 
     // Email validation
@@ -155,20 +209,35 @@ const Login = ({ onLoginSuccess, onBackToApp }) => {
     };
 
     // Handle guest mode
-    const handleGuestMode = () => {
+    const handleGuestMode = async () => {
         setIsGuestMode(true);
-        const guestUser = {
-            name: 'Guest User',
-            email: 'guest@example.com',
-            picture: null,
-            sub: 'guest-user'
-        };
+        setIsLoading(true);
 
-        localStorage.setItem('googleChatUser', JSON.stringify(guestUser));
-        setSuccess('Guest mode activated! Redirecting...');
-        setTimeout(() => {
-            onLoginSuccess(guestUser);
-        }, 1500);
+        try {
+            // Create or get guest user
+            let guestUser;
+            try {
+                guestUser = await apiService.createUser('Guest User', 'guest@example.com');
+            } catch (error) {
+                if (error.message.includes('already exists')) {
+                    const users = await apiService.getUsers();
+                    guestUser = users.find(u => u.email === 'guest@example.com');
+                } else {
+                    throw error;
+                }
+            }
+
+            localStorage.setItem('googleChatUser', JSON.stringify(guestUser));
+            setSuccess('Guest mode activated! Redirecting...');
+            setTimeout(() => {
+                onLoginSuccess(guestUser);
+            }, 1500);
+        } catch (error) {
+            console.error('Guest mode error:', error);
+            setError('Failed to activate guest mode. Please try again.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     // Handle back to email step
@@ -297,18 +366,46 @@ const Login = ({ onLoginSuccess, onBackToApp }) => {
                     <span>or</span>
                 </div>
 
+                {/* Gmail Login Buttons */}
+                <div className="gmail-section">
+                    <button
+                        type="button"
+                        className="gmail-signin-button athi-btn"
+                        onClick={handleAthiLogin}
+                        disabled={isLoading}
+                    >
+                        <div className="gmail-signin-content">
+                            <div className="gmail-icon">A</div>
+                            <span>Sign in as Athi (aathi7009@gmail.com)</span>
+                        </div>
+                    </button>
+
+                    <button
+                        type="button"
+                        className="gmail-signin-button athiganesh-btn"
+                        onClick={handleAthiganeshLogin}
+                        disabled={isLoading}
+                    >
+                        <div className="gmail-signin-content">
+                            <div className="gmail-icon">A</div>
+                            <span>Sign in as Athiganesh (athiganesh273@gmail.com)</span>
+                        </div>
+                    </button>
+                </div>
+
                 {/* Google OAuth Login */}
                 <div className="oauth-section">
-                    <GoogleLogin
-                        onSuccess={handleCredentialResponse}
-                        onError={() => setError('Google login failed. Please try again.')}
-                        theme="outline"
-                        size="large"
-                        text="signin_with"
-                        shape="rectangular"
-                        width="100%"
-                        useOneTap={true}
-                    />
+                    <button
+                        type="button"
+                        className="google-signin-button"
+                        onClick={handleGoogleSignIn}
+                        disabled={isLoading}
+                    >
+                        <div className="google-signin-content">
+                            <div className="google-icon">G</div>
+                            <span>Sign in with Google (Demo)</span>
+                        </div>
+                    </button>
                 </div>
 
                 {/* Guest Mode */}

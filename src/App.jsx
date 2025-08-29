@@ -22,7 +22,8 @@ import { useState, useEffect, useRef } from 'react';
 import SpaceView from './SpaceView';
 import DirectMessageView from './DirectMessageView';
 import Login from './Login\'/Login';
-import { GoogleLogin, useGoogleLogin } from '@react-oauth/google';
+import websocketService from './services/websocketService';
+import apiService from './services/apiService';
 
 function App() {
   const [showNewChatPopup, setShowNewChatPopup] = useState(false);
@@ -46,6 +47,10 @@ function App() {
   const [currentDirectMessage, setCurrentDirectMessage] = useState(null);
   const [currentPage, setCurrentPage] = useState('home'); // 'home', 'starred', 'mentions'
   const [showLoginPage, setShowLoginPage] = useState(false);
+  const [availableUsers, setAvailableUsers] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const [isWebSocketConnected, setIsWebSocketConnected] = useState(false);
+  const [conversationMessages, setConversationMessages] = useState(new Map());
 
   const popupRef = useRef(null);
   const buttonRef = useRef(null);
@@ -62,11 +67,332 @@ function App() {
       const userData = JSON.parse(savedUser);
       setUser(userData);
       setIsLoggedIn(true);
+      // Connect to WebSocket
+      connectWebSocket(userData);
     } else {
       // Show login page if no user is logged in
       setShowLoginPage(true);
     }
   }, []);
+
+  // Load available users when component mounts
+  useEffect(() => {
+    loadAvailableUsers();
+  }, []);
+
+  // Load existing conversations when user is authenticated and available users are loaded
+  useEffect(() => {
+    if (user && user.id && availableUsers.length > 0) {
+      // Only load conversations if we haven't loaded them yet
+      if (conversations.length === 0) {
+        loadExistingConversations();
+      }
+    }
+  }, [user, availableUsers, conversations.length]);
+
+
+
+  // WebSocket connection function
+  const connectWebSocket = async (userData) => {
+    try {
+      await websocketService.connect(userData);
+
+      // Wait a moment for the connection to be fully established
+      setTimeout(() => {
+        setIsWebSocketConnected(websocketService.isReady());
+      }, 1000);
+
+      // Set up WebSocket message handlers
+      websocketService.onMessage('login_success', (message) => {
+        // Update the user state with the server's user data (which has the correct email-based ID)
+        setUser(message.user);
+
+        // Also update the WebSocket service user data
+        websocketService.updateUser(message.user);
+
+        setIsWebSocketConnected(true);
+      });
+
+
+      websocketService.onMessage('conversation_created', (message) => {
+        console.log('🎉 Conversation created:', message.conversation);
+        setConversations(prev => [...prev, message.conversation]);
+
+        // If it's a direct message conversation, add it to direct messages
+        if (message.conversation.type === 'direct') {
+          // Find the other participant (not the current user)
+          const otherParticipantId = message.conversation.participants.find(id => id !== user.id);
+
+          const otherUser = availableUsers.find(u => u.id === otherParticipantId);
+
+          if (otherUser) {
+            const newDirectMessage = {
+              id: message.conversation.id,
+              conversationId: message.conversation.id,
+              contact: otherUser,
+              lastMessage: null,
+              timestamp: new Date()
+            };
+
+            setDirectMessages(prev => {
+              // Check if this conversation already exists
+              const exists = prev.find(dm => dm.conversationId === message.conversation.id);
+              if (!exists) {
+                return [...prev, newDirectMessage];
+              } else {
+                // Update the existing conversation instead of adding a duplicate
+                return prev.map(dm =>
+                  dm.conversationId === message.conversation.id ? newDirectMessage : dm
+                );
+              }
+            });
+
+            // Set as current conversation
+            setCurrentDirectMessage(newDirectMessage);
+          } else {
+            // Create a fallback user object if we can't find the user
+            const fallbackUser = {
+              id: otherParticipantId,
+              name: `User ${otherParticipantId}`,
+              email: `user${otherParticipantId}@example.com`,
+              avatar: 'U'
+            };
+
+            const newDirectMessage = {
+              id: message.conversation.id,
+              conversationId: message.conversation.id,
+              contact: fallbackUser,
+              lastMessage: null,
+              timestamp: new Date()
+            };
+
+            setDirectMessages(prev => {
+              // Check if this conversation already exists
+              const exists = prev.find(dm => dm.conversationId === message.conversation.id);
+              if (!exists) {
+                return [...prev, newDirectMessage];
+              } else {
+                // Update the existing conversation instead of adding a duplicate
+                return prev.map(dm =>
+                  dm.conversationId === message.conversation.id ? newDirectMessage : dm
+                );
+              }
+            });
+
+            // Set as current conversation
+            setCurrentDirectMessage(newDirectMessage);
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('Failed to connect to WebSocket:', error);
+      setIsWebSocketConnected(false);
+    }
+  };
+
+  // Load available users from API
+  const loadAvailableUsers = async () => {
+    try {
+      console.log('📥 Loading available users...');
+      const users = await apiService.getUsers();
+      console.log('📥 Loaded users:', users);
+      setAvailableUsers(users);
+    } catch (error) {
+      console.error('Failed to load users:', error);
+    }
+  };
+
+  // Load existing conversations from API
+  const loadExistingConversations = async () => {
+    try {
+      console.log('📥 Loading existing conversations for user:', user.id);
+      const conversations = await apiService.getConversations(user.id);
+      console.log('📥 Loaded conversations:', conversations);
+
+      // Set conversations
+      setConversations(conversations);
+
+      // Convert conversations to direct messages format
+      const directMessages = conversations
+        .filter(conv => conv.type === 'direct')
+        .map(conv => {
+          // Find the other participant
+          const otherParticipantId = conv.participants.find(id => id !== user.id);
+          const otherUser = availableUsers.find(u => u.id === otherParticipantId);
+
+          if (otherUser) {
+            return {
+              id: conv.id,
+              conversationId: conv.id,
+              contact: otherUser,
+              lastMessage: conv.lastMessage || null,
+              timestamp: new Date(conv.createdAt)
+            };
+          } else {
+            // Create fallback user if not found
+            const fallbackUser = {
+              id: otherParticipantId,
+              name: `User ${otherParticipantId}`,
+              email: `user${otherParticipantId}@example.com`,
+              avatar: 'U'
+            };
+
+            return {
+              id: conv.id,
+              conversationId: conv.id,
+              contact: fallbackUser,
+              lastMessage: conv.lastMessage || null,
+              timestamp: new Date(conv.createdAt)
+            };
+          }
+        })
+        .filter((dm, index, self) =>
+          // Remove duplicates based on conversationId
+          index === self.findIndex(d => d.conversationId === dm.conversationId)
+        );
+
+      console.log('📥 Converted to direct messages:', directMessages);
+      // Replace existing direct messages with the loaded ones
+      setDirectMessages(directMessages);
+
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    }
+  };
+
+  // Load messages for a specific conversation
+  const loadConversationMessages = async (conversationId) => {
+    try {
+      console.log('📥 Loading messages for conversation:', conversationId);
+      const messages = await apiService.getMessages(conversationId);
+      console.log('📥 Loaded messages:', messages);
+
+      // Convert messages to the format expected by DirectMessageView
+      const formattedMessages = messages.map(msg => ({
+        id: msg.id,
+        content: msg.content,
+        sender: msg.senderId === user.id ? 'You' : 'Other',
+        timestamp: new Date(msg.timestamp),
+        type: msg.type || 'text'
+      }));
+
+      console.log('📥 Formatted messages:', formattedMessages);
+
+      // Store messages in a state that can be passed to DirectMessageView
+      setConversationMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.set(conversationId, formattedMessages);
+        return newMap;
+      });
+
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+    }
+  };
+
+  // Delete conversation
+  const handleDeleteConversation = async (conversationId) => {
+    try {
+      console.log('🗑️ Deleting conversation:', conversationId);
+      console.log('🗑️ Current direct message:', currentDirectMessage);
+      console.log('🗑️ All conversations:', conversations);
+      console.log('🗑️ All direct messages:', directMessages);
+
+      // Call API to delete conversation
+      await apiService.deleteConversation(conversationId);
+
+      // Remove from local state
+      setConversations(prev => prev.filter(conv => conv.id !== conversationId));
+      setDirectMessages(prev => prev.filter(dm => dm.conversationId !== conversationId));
+
+      // Remove messages from conversation messages
+      setConversationMessages(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(conversationId);
+        return newMap;
+      });
+
+      // If this was the current conversation, go back to home
+      if (currentDirectMessage && currentDirectMessage.conversationId === conversationId) {
+        setCurrentDirectMessage(null);
+      }
+
+      console.log('🗑️ Conversation deleted successfully');
+
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      alert('Failed to delete conversation. Please try again.');
+    }
+  };
+
+  // Clear all server data (debug function)
+  const handleClearAllData = async () => {
+    const isConfirmed = window.confirm(
+      'Are you sure you want to clear ALL server data? This will remove all conversations, messages, and active connections. This action cannot be undone.'
+    );
+
+    if (isConfirmed) {
+      try {
+        console.log('🗑️ Clearing all server data...');
+        const response = await fetch('http://localhost:3001/api/debug/clear-all', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('🗑️ Server data cleared:', result);
+          alert(`Server data cleared successfully!\nCleared: ${result.cleared.connections} connections, ${result.cleared.conversations} conversations, ${result.cleared.messages} message groups`);
+
+          // Clear local state
+          setConversations([]);
+          setDirectMessages([]);
+          setConversationMessages(new Map());
+          setCurrentDirectMessage(null);
+        } else {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+      } catch (error) {
+        console.error('Failed to clear server data:', error);
+        alert('Failed to clear server data. Please try again.');
+      }
+    }
+  };
+
+
+
+  // Update conversation with new message
+  const updateConversationWithMessage = (newMessage) => {
+    setConversations(prev => {
+      return prev.map(conv => {
+        if (conv.id === newMessage.conversationId) {
+          return {
+            ...conv,
+            lastMessage: newMessage,
+            lastMessageTime: newMessage.timestamp
+          };
+        }
+        return conv;
+      });
+    });
+
+    // Also update direct messages if this is a direct message conversation
+    setDirectMessages(prev => {
+      return prev.map(dm => {
+        if (dm.conversationId === newMessage.conversationId) {
+          return {
+            ...dm,
+            lastMessage: newMessage,
+            timestamp: new Date(newMessage.timestamp)
+          };
+        }
+        return dm;
+      });
+    });
+  };
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -141,17 +467,17 @@ function App() {
   const handleLogout = () => {
     // Show confirmation dialog
     if (window.confirm('Are you sure you want to log out?')) {
+      websocketService.disconnect();
       setUser(null);
       setIsLoggedIn(false);
       setShowProfileDropdown(false);
       setShowLoginPage(true);
-      setAllContacts([]);
       setSelectedContacts([]);
       setContactSearchQuery('');
       setContactSearchResults([]);
-      setAccessToken(null);
+      setConversations([]);
+      setIsWebSocketConnected(false);
       localStorage.removeItem('googleChatUser');
-      localStorage.removeItem('googleChatAccessToken');
     }
   };
 
@@ -223,162 +549,53 @@ function App() {
     );
   };
 
-  // Google People API login for contacts access
-  const googleLogin = useGoogleLogin({
-    onSuccess: async (response) => {
-      try {
-        // Store access token
-        setAccessToken(response.access_token);
-
-        // Get user info
-        const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${response.access_token}` },
-        });
-        const userInfo = await userInfoResponse.json();
-
-        // Get contacts
-        await fetchContacts(response.access_token);
-
-      } catch (error) {
-        console.error('Error in Google login:', error);
-      }
-    },
-    scope: 'https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/admin.directory.user.readonly',
-  });
-  const searchGmailUsers = async (query, token) => {
-    try {
-      console.log('Searching for:', query);
-      let results = [];
-
-      // First, try to search through user's own contacts
-      if (allContacts.length > 0) {
-        const contactMatches = allContacts.filter(contact => {
-          const name = contact.names?.[0]?.displayName || '';
-          const email = contact.emailAddresses?.[0]?.value || '';
-          const searchTerm = query.toLowerCase();
-
-          return name.toLowerCase().includes(searchTerm) ||
-            email.toLowerCase().includes(searchTerm);
-        });
-
-        results = contactMatches.map(contact => ({
-          id: contact.resourceName,
-          name: contact.names?.[0]?.displayName || 'Unknown',
-          email: contact.emailAddresses?.[0]?.value || '',
-          photo: contact.photos?.[0]?.url || null,
-          source: 'contact'
-        }));
-      }
-
-      // If the query looks like an email, add it as a potential result
-      if (query.includes('@') && query.includes('.') && !results.find(r => r.email === query)) {
-        results.push({
-          id: `email-${query}`,
-          name: query.split('@')[0], // Use the part before @ as name
-          email: query,
-          photo: null,
-          source: 'email'
-        });
-      }
-
-      // Add some common Gmail domains as suggestions if query is short
-      if (query.length < 3 && results.length === 0) {
-        const commonDomains = ['gmail.com', 'googlemail.com'];
-        commonDomains.forEach(domain => {
-          results.push({
-            id: `suggestion-${domain}`,
-            name: `Search ${domain} users`,
-            email: `@${domain}`,
-            photo: null,
-            source: 'suggestion'
-          });
-        });
-      }
-
-      console.log('Search results:', results);
-      return results;
-
-    } catch (error) {
-      console.error('Error searching Gmail users:', error);
-      return [];
-    }
-  };
-
-  // Fetch user's own contacts (for reference)
-  const fetchContacts = async (token) => {
-    try {
-      const contactsResponse = await fetch(
-        `https://people.googleapis.com/v1/people/me/connections?personFields=names,emailAddresses,photos&pageSize=100`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      if (!contactsResponse.ok) {
-        throw new Error(`HTTP error! status: ${contactsResponse.status}`);
-      }
-
-      const contactsData = await contactsResponse.json();
-      console.log('Contacts loaded:', contactsData.connections || []);
-
-      // Store contacts in state
-      setAllContacts(contactsData.connections || []);
-
-    } catch (error) {
-      console.error('Error fetching contacts:', error);
-      setAllContacts([]);
-    }
-  };
-
-  // State for storing all contacts
-  const [allContacts, setAllContacts] = useState([]);
-
-  // Load contacts when user logs in
-  useEffect(() => {
-    if (isLoggedIn && user) {
-      loadContacts();
-    }
-  }, [isLoggedIn, user]);
-
-  // Load all contacts from Google People API
-  const loadContacts = async () => {
-    try {
-      // If we already have contacts loaded, don't fetch again
-      if (allContacts.length > 0) {
-        return;
-      }
-
-      // If we have an access token, use it to fetch contacts
-      if (accessToken) {
-        await fetchContacts(accessToken);
-      } else {
-        console.log('No access token available, need to login first');
-      }
-    } catch (error) {
-      console.error('Error loading contacts:', error);
-    }
-  };
-
-  // Search Gmail users function
+  // Search users function
   const searchContacts = async (query) => {
     if (!query.trim()) {
       setContactSearchResults([]);
       return;
     }
 
+    console.log('🔍 Searching contacts with query:', query);
+    console.log('🔍 Available users:', availableUsers);
+    console.log('🔍 Current user:', user);
+
     setIsSearchingContacts(true);
     try {
-      // First, ensure we have contacts loaded if user is logged in
-      if (isLoggedIn && accessToken && allContacts.length === 0) {
-        await fetchContacts(accessToken);
-      }
+      // Search through available users, but exclude the current user
+      const searchResults = availableUsers.filter(availableUser => {
+        // Don't show the current user in search results
+        if (availableUser.id === user?.id) {
+          console.log('🔍 Excluding current user:', availableUser.name);
+          return false;
+        }
 
-      // Now search for users
-      const searchResults = await searchGmailUsers(query, accessToken);
+        const name = availableUser.name || '';
+        const email = availableUser.email || '';
+        const searchTerm = query.toLowerCase();
+
+        const matches = name.toLowerCase().includes(searchTerm) ||
+          email.toLowerCase().includes(searchTerm);
+
+        console.log('🔍 Checking user:', availableUser.name, 'matches:', matches);
+        return matches;
+      }).map(availableUser => ({
+        id: availableUser.id,
+        name: availableUser.name,
+        email: availableUser.email,
+        photo: null,
+        source: 'user'
+      }));
+
+      console.log('🔍 Search results:', searchResults);
+
+      // Only show real users, no email-based contacts
+      // This prevents creating conversations with non-existent users
+
       setContactSearchResults(searchResults);
 
     } catch (error) {
-      console.error('Error searching Gmail users:', error);
+      console.error('Error searching users:', error);
       setContactSearchResults([]);
     } finally {
       setIsSearchingContacts(false);
@@ -394,8 +611,25 @@ function App() {
 
   // Handle contact selection
   const handleContactSelect = (contact) => {
+    console.log('🎯 Contact selected:', contact);
+    console.log('🎯 Current user:', user);
+    console.log('🎯 Selected contacts before:', selectedContacts);
+
+    // Don't allow selecting yourself
+    if (contact.id === user?.id) {
+      console.log('Cannot select yourself as a contact');
+      return;
+    }
+    // Don't allow selecting email-based contacts (non-existent users)
+    if (contact.source === 'email') {
+      console.log('Cannot select email-based contacts. Please select a real user.');
+      return;
+    }
     if (!selectedContacts.find(c => c.id === contact.id)) {
+      console.log('🎯 Adding contact to selected contacts');
       setSelectedContacts([...selectedContacts, contact]);
+    } else {
+      console.log('🎯 Contact already selected');
     }
     setContactSearchQuery('');
     setContactSearchResults([]);
@@ -410,10 +644,21 @@ function App() {
 
   // Handle login success
   const handleLoginSuccess = (userData) => {
+    console.log('Login success with user data:', userData);
     setUser(userData);
     setIsLoggedIn(true);
     setShowLoginPage(false);
     setShowLoginModal(false);
+
+    // Ensure the current user is in the available users list
+    setAvailableUsers(prev => {
+      const userExists = prev.find(u => u.id === userData.id);
+      if (!userExists) {
+        console.log('Adding current user to available users list');
+        return [...prev, userData];
+      }
+      return prev;
+    });
   };
 
   // Handle back to app from login page
@@ -423,26 +668,46 @@ function App() {
 
   // Handle start chat
   const handleStartChat = () => {
+    console.log('🚀 Start chat clicked');
+    console.log('🚀 Selected contacts:', selectedContacts);
+    console.log('🚀 Current user:', user);
+
     if (selectedContacts.length > 0) {
       const contact = selectedContacts[0]; // For now, handle single contact
+      console.log('🚀 Using contact:', contact);
 
-      // Create a new direct message
-      const newDirectMessage = {
-        id: Date.now(),
-        contact: contact,
-        lastMessage: null,
-        timestamp: new Date()
-      };
-
-      // Add to direct messages if not already exists
-      const existingDM = directMessages.find(dm => dm.contact.email === contact.email);
-      if (!existingDM) {
-        setDirectMessages(prev => [...prev, newDirectMessage]);
+      // Check if WebSocket is ready
+      if (!websocketService.isReady()) {
+        console.error('WebSocket not ready. Status:', websocketService.getConnectionStatus());
+        alert('Connection not ready. Please try again.');
+        return;
       }
 
-      // Set as current direct message
-      setCurrentDirectMessage(existingDM || newDirectMessage);
+      // Check if conversation already exists
+      const existingConversation = directMessages.find(dm =>
+        dm.contact && dm.contact.id === contact.id
+      );
 
+      if (existingConversation) {
+        console.log('🚀 Conversation already exists, opening it:', existingConversation);
+        setCurrentDirectMessage(existingConversation);
+        setShowNewChatPopup(false);
+        setSelectedContacts([]);
+        setContactSearchQuery('');
+        setContactSearchResults([]);
+        return;
+      }
+
+      // Create a new conversation via WebSocket
+      const participants = [user.id, contact.id];
+      const conversationName = `Chat with ${contact.name}`;
+
+      console.log('🚀 Creating conversation with participants:', participants);
+      console.log('🚀 Conversation name:', conversationName);
+
+      websocketService.createConversation(participants, conversationName, 'direct');
+
+      // Close the popup and reset state
       setShowNewChatPopup(false);
       setSelectedContacts([]);
       setContactSearchQuery('');
@@ -549,6 +814,21 @@ function App() {
   };
 
   const handleDirectMessageClick = (directMessage) => {
+    // Don't allow chatting with yourself
+    if (directMessage.contact.id === user?.id) {
+      console.log('Cannot chat with yourself');
+      return;
+    }
+
+    console.log('🎯 Clicking on direct message:', directMessage);
+    console.log('🎯 Conversation ID:', directMessage.conversationId);
+
+    // Load messages for existing conversation
+    if (directMessage.conversationId) {
+      console.log('🎯 Loading messages for existing conversation:', directMessage.conversationId);
+      loadConversationMessages(directMessage.conversationId);
+    }
+
     setCurrentDirectMessage(directMessage);
     setCurrentSpace(null);
   };
@@ -591,8 +871,10 @@ function App() {
 
             <div className="header-right">
               <div className="status-indicator">
-                <div className="status-dot"></div>
-                <span className="status-text">Active</span>
+                <div className={`status-dot ${isWebSocketConnected ? 'connected' : 'disconnected'}`}></div>
+                <span className="status-text">
+                  {isWebSocketConnected ? 'Connected' : 'Connecting...'}
+                </span>
                 <ChevronDown size={16} />
               </div>
 
@@ -607,6 +889,19 @@ function App() {
               <div className="header-icon">
                 <Grid3X3 size={20} />
               </div>
+
+              {/* Debug button - only show in development */}
+              {process.env.NODE_ENV === 'development' && (
+                <div className="header-icon">
+                  <button
+                    className="debug-btn"
+                    onClick={handleClearAllData}
+                    title="Clear all server data (Debug)"
+                  >
+                    🗑️
+                  </button>
+                </div>
+              )}
 
               <div className="profile-icon-container">
                 <div className="profile-icon" onClick={handleLoginClick}>
@@ -690,7 +985,10 @@ function App() {
                     <div
                       key={dm.id}
                       className={`dm-item ${currentDirectMessage?.id === dm.id ? 'active' : ''}`}
-                      onClick={() => handleDirectMessageClick(dm)}
+                      onClick={() => {
+                        handleDirectMessageClick(dm);
+                      }}
+                      style={{ cursor: 'pointer' }}
                     >
                       <div className="dm-avatar">
                         <span className="dm-avatar-text">{dm.contact.name.charAt(0).toUpperCase()}</span>
@@ -707,6 +1005,8 @@ function App() {
                     <div className="dm-empty-hint">Start a conversation to see it here</div>
                   </div>
                 )}
+
+
               </div>
 
               <div className="sidebar-section">
@@ -867,7 +1167,7 @@ function App() {
                     onClick={handleStartChat}
                     disabled={selectedContacts.length === 0}
                   >
-                    Start chat
+                    Start chat ({selectedContacts.length} selected)
                   </button>
                 </div>
               </div>
@@ -940,6 +1240,8 @@ function App() {
               <DirectMessageView
                 directMessage={currentDirectMessage}
                 onBack={handleBackToHome}
+                initialMessages={conversationMessages.get(currentDirectMessage.conversationId) || []}
+                onDeleteConversation={handleDeleteConversation}
               />
             ) : currentSpace ? (
               <SpaceView space={currentSpace} onBack={handleBackToHome} />

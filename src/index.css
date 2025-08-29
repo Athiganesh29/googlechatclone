@@ -137,6 +137,15 @@ body {
   height: 8px;
   background-color: #00c851;
   border-radius: 50%;
+  transition: background-color 0.3s ease;
+}
+
+.status-dot.connected {
+  background-color: #00c851;
+}
+
+.status-dot.disconnected {
+  background-color: #ff6b6b;
 }
 
 .status-text {
@@ -1739,14 +1748,28 @@ body {
 .message-item {
   display: flex;
   margin-bottom: 16px;
+}
+
+.message-item.sent {
   justify-content: flex-end;
+}
+
+.message-item.received {
+  justify-content: flex-start;
 }
 
 .message-wrapper {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
   max-width: 70%;
+}
+
+.message-item.sent .message-wrapper {
+  align-items: flex-end;
+}
+
+.message-item.received .message-wrapper {
+  align-items: flex-start;
 }
 
 .message-header {
@@ -1758,11 +1781,18 @@ body {
 }
 
 .message-content {
-  background: #1a73e8;
   border-radius: 12px;
   padding: 12px 16px;
   width: 100%;
   word-wrap: break-word;
+}
+
+.message-item.sent .message-content {
+  background: #1a73e8;
+}
+
+.message-item.received .message-content {
+  background: #f1f3f4;
 }
 
 .message-sender {
@@ -1777,9 +1807,16 @@ body {
 }
 
 .message-text {
-  color: #ffffff;
   font-size: 14px;
   line-height: 1.4;
+}
+
+.message-item.sent .message-text {
+  color: #ffffff;
+}
+
+.message-item.received .message-text {
+  color: #1f1f1f;
 }
 
 .message-gif img {
@@ -1792,12 +1829,98 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #ffffff;
   font-size: 14px;
+}
+
+.message-item.sent .message-file {
+  color: #ffffff;
+}
+
+.message-item.received .message-file {
+  color: #1f1f1f;
 }
 
 .message-file svg {
   flex-shrink: 0;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.file-size {
+  color: inherit;
+}
+
+.file-download {
+  color: #1a73e8;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.file-download:hover {
+  color: #1557b0;
+  text-decoration: underline;
+}
+
+.message-voice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.message-item.sent .message-voice {
+  color: #ffffff;
+}
+
+.message-item.received .message-voice {
+  color: #1f1f1f;
+}
+
+.voice-player {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.voice-audio {
+  width: 100%;
+  max-width: 300px;
+  height: 40px;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  border: 1px solid #dadce0;
+}
+
+.message-item.sent .voice-audio {
+  background-color: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.voice-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.voice-duration {
+  color: inherit;
+  font-weight: 500;
+}
+
+.voice-size {
+  color: inherit;
+  opacity: 0.7;
 }
 
 .space-input-bar {
@@ -1842,6 +1965,12 @@ body {
 
 .message-input::placeholder {
   color: #5f6368;
+}
+
+.message-input:empty:before {
+  content: attr(data-placeholder);
+  color: #5f6368;
+  pointer-events: none;
 }
 
 .input-actions {
@@ -3367,4 +3496,42 @@ body {
 .welcome-btn svg {
   color: #4285f4;
   flex-shrink: 0;
+}
+
+/* Delete button styles */
+.delete-btn {
+  color: #5f6368;
+  transition: all 0.2s ease;
+}
+
+.delete-btn:hover {
+  color: #ea4335;
+  background-color: #fce8e6;
+  border-radius: 50%;
+}
+
+.delete-btn:active {
+  transform: scale(0.95);
+}
+
+/* Debug button styles */
+.debug-btn {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  transition: all 0.2s ease;
+  color: #5f6368;
+}
+
+.debug-btn:hover {
+  background-color: #fce8e6;
+  color: #ea4335;
+  transform: scale(1.1);
+}
+
+.debug-btn:active {
+  transform: scale(0.95);
 }
